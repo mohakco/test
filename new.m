@@ -353,3 +353,126 @@ legend('Class -1','Class +1');
 title('Membership Distribution'); grid on;
 
 sgtitle(sprintf('Fuzzy SVM | Accuracy: %.2f%%', acc));
+
+// Clustering code scratch
+
+clear; close all; clc;
+
+rng(42);
+N = 300;
+data = [randn(N/3,2)*0.5+[2 2]; randn(N/3,2)*0.5+[0 -2]; randn(N/3,2)*0.5+[-2 2]];
+
+c = 3; max_iters = 100; tol = 1e-5;
+[N2, d] = size(data);
+
+U = rand(N2, c);
+U = U ./ sum(U, 2);
+obj_history = [];
+
+for iter = 1:max_iters
+    U_old = U;
+    Um = U .^ 2;
+    centers = (Um' * data) ./ sum(Um)';
+
+    dist = sqrt(max(0, sum(data.^2, 2) - 2*(data*centers') + sum(centers.^2, 2)'));
+
+    for i = 1:N2
+        if any(dist(i,:) == 0)
+            [~, j] = min(dist(i,:));
+            U(i,:) = 0; U(i,j) = 1;
+        else
+            ratios = (dist(i,:) ./ dist(i,:)') .^ 2;
+            U(i,:) = 1 ./ sum(ratios, 1);
+        end
+    end
+
+    obj_history(end+1) = sum(sum((U.^2) .* (dist.^2)));
+
+    if max(abs(U(:) - U_old(:))) < tol
+        fprintf('Converged after %d iterations.\n', iter);
+        break;
+    end
+end
+
+[~, labels] = max(U, [], 2);
+
+figure('Position', [100 100 900 400]);
+subplot(1,2,1);
+gscatter(data(:,1), data(:,2), labels);
+hold on;
+plot(centers(:,1), centers(:,2), 'kx', 'MarkerSize', 12, 'LineWidth', 2);
+title('FCM (m=2)'); xlabel('x_1'); ylabel('x_2'); grid on;
+
+subplot(1,2,2);
+plot(1:length(obj_history), obj_history, 'b-o', 'MarkerSize', 4, 'LineWidth', 1.2);
+xlabel('Iteration'); ylabel('J_m'); title('Convergence'); grid on;
+
+disp(U(1:5,:));
+
+// Fuzzy SVM scratch
+
+clear; close all; clc;
+
+rng(42);
+N = 200;
+data = [randn(N/2,2)+[2 0]; randn(N/2,2)+[0 2]];
+labels = [ones(N/2,1); -ones(N/2,1)];
+
+n_out = round(0.1*N/2);
+out1 = randperm(N/2, n_out);
+out2 = N/2 + randperm(N/2, n_out);
+noise_idx = [out1, out2];
+data(noise_idx,:) = data(noise_idx,:) + 3*randn(length(noise_idx),2);
+
+rng(43);
+idx = randperm(N);
+tr = idx(1:round(0.7*N)); te = idx(round(0.7*N)+1:end);
+X_train = data(tr,:); y_train = labels(tr);
+X_test  = data(te,:);  y_test  = labels(te);
+
+s = zeros(size(y_train));
+for k = [-1, 1]
+    ci = y_train == k;
+    d = sqrt(sum((X_train(ci,:) - mean(X_train(ci,:))).^2, 2));
+    s(ci) = 1 - d/(max(d)+eps);
+end
+s = 0.01 + 0.99*(s - min(s))/(max(s) - min(s));
+
+C = 1;
+n = size(X_train,1);
+H = (y_train*y_train').*(X_train*X_train') + 1e-9*eye(n);
+alpha = quadprog(H, -ones(n,1), [], [], y_train', 0, zeros(n,1), s*C, [], ...
+    optimoptions('quadprog','Display','off','Algorithm','interior-point-convex'));
+
+sv = find(alpha > 1e-6);
+w = sum((alpha(sv).*y_train(sv)).*X_train(sv,:), 1)';
+fi = find(alpha > 1e-6 & alpha < s*C - 1e-6, 1);
+b = ~isempty(fi)*( y_train(fi) - X_train(fi,:)*w ) + ...
+     isempty(fi) * mean(y_train(sv) - X_train(sv,:)*w);
+
+predict = @(X) sign(X*w + b);
+fprintf('Train acc: %.2f%%  Test acc: %.2f%%  SVs: %d\n', ...
+    100*mean(predict(X_train)==y_train), ...
+    100*mean(predict(X_test)==y_test), numel(sv));
+
+x1 = linspace(min(data(:,1))-1, max(data(:,1))+1, 200);
+x2 = linspace(min(data(:,2))-1, max(data(:,2))+1, 200);
+[XX,YY] = meshgrid(x1,x2);
+Z = reshape(predict([XX(:),YY(:)]), size(XX));
+
+figure('Position',[100 100 1000 400]);
+subplot(1,2,1);
+gscatter(X_train(:,1), X_train(:,2), y_train, 'rb', 'ox', 5); hold on;
+contour(XX,YY,Z,[0 0],'k-','LineWidth',2);
+contour(XX,YY,Z,[-1 -1],'k--','LineWidth',1,'Color',[.5 .5 .5]);
+contour(XX,YY,Z,[1 1],'k--','LineWidth',1,'Color',[.5 .5 .5]);
+plot(X_train(sv,1), X_train(sv,2), 'ko', 'MarkerSize', 8, 'LineWidth', 1.5);
+title(sprintf('Train (%.1f%%)', 100*mean(predict(X_train)==y_train)));
+xlabel('x_1'); ylabel('x_2'); grid on;
+
+subplot(1,2,2);
+gscatter(X_test(:,1), X_test(:,2), y_test, 'rb', 'ox', 5); hold on;
+contour(XX,YY,Z,[0 0],'k-','LineWidth',2);
+title(sprintf('Test (%.1f%%)', 100*mean(predict(X_test)==y_test)));
+xlabel('x_1'); ylabel('x_2'); grid on;
+sgtitle('Linear FSVM');
